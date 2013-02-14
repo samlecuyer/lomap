@@ -1,0 +1,21 @@
+{{ define "title" }} lomap - Login {{ end }}
+
+{{ define "content" }}
+	<div class="centered">
+	{{ range .ctx.Session.Flashes }}
+        <h2>{{ . }}</h2>
+    {{ end }}
+		<form action="/login" method="POST" id="login_form">
+			<div id="errors"></div>
+			<label>Server:</label>
+			<select name="host">
+				<option value="imap.gmail.com">gmail</input>
+			</select>
+			<label>Username:</label>
+			<input type="text" id="username" name="username"></input>
+			<label>Password:</label>
+			<input type="password" id="password" name="password"></input>
+			<input type="submit" value="send" />
+		</form>
+	</div>
+{{ end }}

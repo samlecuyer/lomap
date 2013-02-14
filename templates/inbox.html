@@ -1,0 +1,19 @@
+{{ define "title" }} lomap - Inbox {{ end }}
+
+{{ define "content" }}
+	<script src='/static/jquery.inbox.js'></script>
+	<div class="navbar" data-role="navbar">
+		<a href="/logout">logout</a>
+	</div>
+	<div class="onethirdColumn" data-role="mailbox">
+		
+	</div>
+	<div class="twothirdColumn" data-role="reader">
+
+	</div>
+	<script type="text/javascript">
+	$(document).ready(function() {
+		$('[data-role~=mailbox]').inbox()
+	});
+	</script>
+{{ end }}
