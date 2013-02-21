@@ -79,7 +79,7 @@ func main() {
 		// securecookie.GenerateRandomKey(32),
 		// securecookie.GenerateRandomKey(32))
 	store.Options.HttpOnly = true
-	// store.Options.Secure = true
+	store.Options.Secure = true
 
 	clients = make(map[string]*imap.Client)
 
@@ -88,13 +88,18 @@ func main() {
 
 	m.Get("/login", handler(LoginForm))
 	m.Post("/login", handler(LoginHandler))
-	m.Get("/inbox", handler(InboxHandler))
-	m.Get("/inbox/messages", handler(MessagesHandler))
-	m.Get("/inbox/message/:id", handler(MessageHandler))
-	m.Get("/inbox/attachment/:msg/:id", handler(AttachmentHandler))
+	
 	m.Get("/logout", handler(Logout))
+
+	m.Get("/mail", handler(InboxHandler))
+	m.Get("/mail/messages/", handler(MessagesHandler))
+	m.Get("/mail/message/:id", handler(MessageHandler))
+	m.Get("/mail/attachment/:msg/:id", handler(AttachmentHandler))
+
+	m.Post("/mail/archive/:id", handler(ArchiveHandler))
+	m.Post("/mail/delete/:id", handler(DeleteHandler))
 
 	m.Get("/", handler(root))
 	http.Handle("/", m)
-	http.ListenAndServe(":5000", nil)
+	http.ListenAndServeTLS(":5000", "certs/newcert.pem",  "certs/privkey.pem", nil)
 }

@@ -5,11 +5,14 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+	"errors"
+	"log"
 
 	"strconv"
 	"sort"
 
 	"github.com/goods/httpbuf"
+	"github.com/samlecuyer/redactomat"
 	"code.google.com/p/rsc/imap"
 )
 
@@ -36,7 +39,7 @@ func (h handler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 
 func root(w http.ResponseWriter, r *http.Request, ctx *Context) error {
 	if _, err := ctx.GetClient(); err == nil {
-		http.Redirect(w, r, "/inbox", http.StatusSeeOther)
+		http.Redirect(w, r, "/mail", http.StatusSeeOther)
 	} else {
 		http.Redirect(w, r, "/login", http.StatusSeeOther)
 	}
@@ -60,12 +63,15 @@ func LoginHandler(w http.ResponseWriter, r *http.Request, ctx *Context) error {
 	pass := r.FormValue("password")
 
 	_, err := ctx.PerformLogin(host, name, pass)
+	w.Header().Add("Location", "/mail")
 	return err
 }
 
 func InboxHandler(w http.ResponseWriter, r *http.Request, ctx *Context) error {
+	client, _ := ctx.GetClient()
 	return T("inbox.html").Execute(w, map[string]interface{}{
 		"ctx": ctx,
+		"bxs": client.Boxes(),
 	})
 }
 
@@ -83,6 +89,7 @@ type Message struct {
 	Uid string
 	Hdr *imap.MsgHdr
 	Seen bool
+	BoxName string
 }
 
 // TODO: more than just the last 50 of the inbox
@@ -93,19 +100,37 @@ func MessagesHandler(w http.ResponseWriter, r *http.Request, ctx *Context) error
 	client, err := ctx.GetClient()
 	if err != nil { return err }
 
-	mailbox := client.Inbox()
+	var mailbox *imap.Box
+	boxName := r.URL.Query().Get("box")
+	log.Println(r.URL)
+	if boxName == "" {
+		mailbox = client.Inbox()
+	} else {
+		mailbox = client.Box(boxName)
+	}
+	if mailbox == nil {
+		w.WriteHeader(404)
+		return nil
+	}
+
 	mailbox.Check()
 	msgs := mailbox.Msgs()
 
 	n := len(msgs)
-	mn := max(1, (minusf(uint32(n), 50)))
-	headers := make([]*Message, uint32(n) - mn)
-	for i, msg := range msgs[mn:] {
-		headers[i] = &Message{
-			fmt.Sprintf("%v",msg.UID),
-			msg.Hdr,
-			(msg.Flags & imap.FlagSeen) == imap.FlagSeen,
+	var headers []*Message
+	if n > 0 {
+		mn := max(1, (minusf(uint32(n), 50)))
+		headers = make([]*Message, uint32(n) - mn)
+		for i, msg := range msgs[mn:] {
+			headers[i] = &Message{
+				fmt.Sprintf("%v",msg.UID),
+				msg.Hdr,
+				(msg.Flags & imap.FlagSeen) == imap.FlagSeen,
+				msg.Box.Name,
+			}
 		}
+	} else {
+		headers = make([]*Message, 0)
 	}
 
 	b, err := json.Marshal(headers)
@@ -122,8 +147,10 @@ func handleMixed(msg *imap.MsgPart) (parts []*MessagePart) {
 	for i, part := range msg.Child {
 		parts[i] = &MessagePart{ ID: part.ID, Name: part.Name, Type: part.Type }
 		switch part.Type {
-		case "text/plain", "text/html":
+		case "text/plain":
 			parts[i].Contents = string(part.Text())
+		case "text/html":
+			parts[i].Contents, _ = redactomat.RedactString(string(part.Text()))
 		case "multipart/alternative":
 			parts[i].Children = handleAlternative(msg)
 		}
@@ -136,8 +163,10 @@ func handleAlternative(msg *imap.MsgPart) (parts []*MessagePart) {
 	for i, part := range msg.Child {
 		parts[i] = &MessagePart{ ID: part.ID, Name: part.Name, Type: part.Type }
 		switch part.Type {
-		case "text/plain", "text/html":
+		case "text/plain":
 			parts[i].Contents = string(part.Text())
+		case "text/html":
+			parts[i].Contents, _ = redactomat.RedactString(string(part.Text()))
 		}
 	}
 	return parts
@@ -146,8 +175,10 @@ func handleAlternative(msg *imap.MsgPart) (parts []*MessagePart) {
 func handleMail(msg *imap.MsgPart) (parts *MessagePart) {
 	parts = &MessagePart{ ID: msg.ID, Name: msg.Name, Type: msg.Type }
 	switch msg.Type {
-	case "text/plain", "text/html":
+	case "text/plain":
 		parts.Contents = string(msg.Text())
+	case "text/html":
+		parts.Contents, _ = redactomat.RedactString(string(msg.Text()))
 	case "multipart/alternative":
 		parts.Children = handleAlternative(msg)
 	case "multipart/mixed":
@@ -168,7 +199,18 @@ func MessageHandler(w http.ResponseWriter, r *http.Request, ctx *Context) error 
 
 	uidstr := r.URL.Query().Get(":id")
 
-	mailbox := client.Inbox()
+	var mailbox *imap.Box
+	boxName := r.URL.Query().Get("box")
+	if boxName == "" {
+		mailbox = client.Inbox()
+	} else {
+		mailbox = client.Box(boxName)
+	}
+	if mailbox == nil {
+		w.WriteHeader(404)
+		return nil
+	}
+
 	mailbox.Check()
 	msgs := mailbox.Msgs()
 
@@ -189,6 +231,80 @@ func MessageHandler(w http.ResponseWriter, r *http.Request, ctx *Context) error 
 		}
 		w.WriteHeader(200)
 		w.Write(b)
+	} else {
+		w.WriteHeader(404)
+	}
+	return nil
+}
+
+func ArchiveHandler(w http.ResponseWriter, r *http.Request, ctx *Context) error {
+	client, err := ctx.GetClient()
+	if err != nil { return err }
+
+	uidstr := r.URL.Query().Get(":id")
+
+	boxname := r.URL.Query().Get("box")
+	mailbox := client.Box(boxname)
+	if mailbox == nil {
+		w.WriteHeader(404)
+		return nil
+	}
+	mailbox.Check()
+	msgs := mailbox.Msgs()
+
+	uid, err := strconv.ParseUint(uidstr, 10, 64)
+	if err != nil {
+		return err
+	}
+	exists := len(msgs)
+	entryId := sort.Search(exists, 
+		func(i int) bool { 
+			return msgs[i].UID >= uid 
+		})
+	if entryId < exists && msgs[entryId] != nil {
+		allMail := client.Box("[Gmail]/All Mail")
+		if allMail == nil {
+			return errors.New("Could not find all mail")
+		}
+		err = allMail.Copy(msgs[entryId:entryId+1])
+		if err != nil { return err }
+		err = mailbox.Delete(msgs[entryId:entryId+1])
+		if err != nil { return err }
+		w.WriteHeader(200)
+	} else {
+		w.WriteHeader(404)
+	}
+	return nil
+}
+
+func DeleteHandler(w http.ResponseWriter, r *http.Request, ctx *Context) error {
+	client, err := ctx.GetClient()
+	if err != nil { return err }
+
+	uidstr := r.URL.Query().Get(":id")
+
+	boxname := r.URL.Query().Get(":box")
+	mailbox := client.Box(boxname)
+	if mailbox == nil {
+		w.WriteHeader(404)
+		return nil
+	}
+	mailbox.Check()
+	msgs := mailbox.Msgs()
+
+	uid, err := strconv.ParseUint(uidstr, 10, 64)
+	if err != nil {
+		return err
+	}
+	exists := len(msgs)
+	entryId := sort.Search(exists, 
+		func(i int) bool { 
+			return msgs[i].UID >= uid 
+		})
+	if entryId < exists && msgs[entryId] != nil {
+		err = mailbox.Delete(msgs[entryId:entryId+1])
+		if err != nil { return err }
+		w.WriteHeader(200)
 	} else {
 		w.WriteHeader(404)
 	}

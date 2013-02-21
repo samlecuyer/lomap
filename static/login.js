@@ -4,8 +4,8 @@ $(document).ready(function($) {
 		$('#errors').empty()
 		var data = $(event.target).serialize();
 		$('#login_form').find('input, select').prop('disabled', true);
-		$.post('/login', data, function() {
-			window.location.pathname = "/inbox"
+		$.post('/login', data, function(contents, textStatus, jqXHR) {
+			window.location = jqXHR.getResponseHeader('location')
 		}).fail(function(data) {
 				$('#errors').text(arguments[0].responseText)
 		}).always(function() {
@@ -13,5 +13,4 @@ $(document).ready(function($) {
 		});
 		return false;
 	});
-
 });

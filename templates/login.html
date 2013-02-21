@@ -1,6 +1,7 @@
 {{ define "title" }} lomap - Login {{ end }}
 
 {{ define "content" }}
+    <script src='/static/login.js'></script>
 	<div class="centered">
 	{{ range .ctx.Session.Flashes }}
         <h2>{{ . }}</h2>
